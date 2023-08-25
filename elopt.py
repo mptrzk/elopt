@@ -1,11 +1,5 @@
-import numpy as np
 import math
-
-
-def genE(lo_mag, hi_mag):
-  return np.concatenate([*[np.array([1, 1.5, 2.2, 3.3, 4.7, 6.8]) * 10**n
-                           for n in range(lo_mag, hi_mag)], 
-                         np.array([10**hi_mag])])
+from functools import partial
 
 def genE(lo, hi):
   for i in range(lo, hi):
@@ -14,9 +8,11 @@ def genE(lo, hi):
   yield 10**hi
 
 e_series = list(genE(-12, 12))
-list(map(si, e_series))
 
-def psi(s):
+
+def psi(s):  
+  if s[-1].isdigit():
+    return float(s)
   x = float(s[:-1])
   sx = s[-1:]
   if sx == 'u':
@@ -26,6 +22,7 @@ def psi(s):
   e = suffixes.index(sx) - suffix_offset
   return x * 1000 ** e
 psi('1.5u')
+
 
 
 def pidx(arr, p, reverse=False):
@@ -48,8 +45,6 @@ def bound(lo: str, hi: str) -> tuple[int, int]:
 bound('1m', '1500u')
 
 
-
-
 def detrail(s: str) -> str:
   s1 = str(float(s))
   if s1[-2:] == '.0':
@@ -66,12 +61,10 @@ def dtrunc(x: float, n :int) -> str:
       continue
     i += 1
   return detrail(s)
-
 assert(dtrunc(1.23456, 3) == '1.23')
 assert(dtrunc(13323456, 3) == '133')
 assert(dtrunc(1.001, 3) == '1')
 assert(dtrunc(1.0, 3) == '1')
-
 
 
 def si(x):
@@ -87,21 +80,87 @@ assert(si(1.2e10) == '12G')
 assert(si(1e-12) == '1p')
 assert(si(680e-9) == '680n')
 
+class Component:
+  def __init__(self, lo, hi, i, unit):
+    self.lo, self.hi = bound(lo, hi)
+    self.unit = unit
+    self.i = self.lo + i % (self.hi - self.lo + 1)
+  def val(self):
+    return e_series[self.i]
+  def inc(self):
+    if self.i < self.hi:
+      self.i += 1
+    return self
+  def dec(self):
+    if self.i > self.lo:
+      self.i -= 1
+    return self
+  def __repr__(self):
+    return si(self.val()) + self.unit
+Capacitor = partial(Component, unit='F')
+Resistor = partial(Component, unit='Ω')
+Resistor('1', '1M', -1)
+Capacitor('1p', '1m', -2)
 
 
-def lowpass(components):
-  R1, R2, C1, C2 = components
-  f = 1 / (2 * math.pi * math.sqrt(R1 * R2 * C1 * C2))
-  Q = math.sqrt(R1 * R2 * C1 * C2) / ((R1 + R2) * C1)
-  return f, Q
 
-def cost(f_ref, Q_ref, components):
-  R1, R2, C1, C2 = components
-  f, Q = lowpass(components)
+
+def cost(fn, f_ref, Q_ref, components):
+  f, Q = fn(components)
   mse = (((f - f_ref) / f_ref)**2 +
          ((Q - Q_ref) / Q_ref)**2
          )
   return mse
-cost(20e3, 0.707, [1, 1, 1, 1])
 
 
+
+def optimize(fn, f_ref, Q_ref):
+  R1 = Resistor('1', '1M', 1)
+  R2 = Resistor('1', '1M', 1)
+  C1 = Capacitor('1p', '1u', 0)
+  C2 = Capacitor('1p', '1u', 0)
+  components = [R1, R2, C1, C2]
+  cf = partial(cost, fn, f_ref, Q_ref)
+  mse = cf(components) 
+  changed = True
+  while changed:
+    changed = False
+    for c in components:
+      c.dec()
+      mse2 = cf(components) 
+      if mse2 < mse:
+        mse = mse2
+        changed = True
+      else:
+        c.inc()
+    for c in components:
+      c.inc()
+      mse2 = cf(components) 
+      if mse2 < mse:
+        mse = mse2
+        changed = True
+      else:
+        c.dec()
+  print(*fn(components), components)
+  return components
+
+
+def lowpass(components):
+  R1, R2, C1, C2 = map(lambda c: c.val(), components)
+  f = 1 / (2 * math.pi * math.sqrt(R1 * R2 * C1 * C2))
+  Q = math.sqrt(R1 * R2 * C1 * C2) / ((R1 + R2) * C2)
+  return f, Q
+
+def highpass(components):
+  R1, R2, C1, C2 = map(lambda c: c.val(), components)
+  f = 1 / (2 * math.pi * math.sqrt(R1 * R2 * C1 * C2))
+  Q = math.sqrt(R1 * R2 * C1 * C2) / (R1 * (C1 + C2))
+  return f, Q
+
+optimize(lowpass, 350, 0.707)
+
+optimize(highpass, 300, 0.707)
+
+optimize(lowpass, 4000, 0.707)
+
+optimize(highpass, 4000, 0.707)
